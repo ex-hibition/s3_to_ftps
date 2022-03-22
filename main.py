@@ -1,3 +1,5 @@
+import datetime
+import os
 from ftplib import FTP_TLS, FTP
 
 # 相手先がvsftpdかつrequire_ssl_reuse=Trueの場合に必要なパッチ
@@ -35,9 +37,18 @@ def put_ftps_to_saas(target_filename: str):
     Args:
         target_filename (str): ローカルに取得した転送するファイル
     """
-    with Patched_FTP_TLS(host='172.17.0.2',user='ftpsuser', passwd='ftpsuser', timeout=60) as ftps:
+    # ファイル名と拡張子に分割
+    filename, extention = os.path.splitext(target_filename)
+    yyyymmdd = datetime.datetime.now().strftime('%Y%m%d')
+    local_path = os.path.join('/tmp', target_filename)
+    # 転送先ファイル名はyyyymmddを追加
+    remote_path = os.path.join('ftp_root', f"{filename}_{yyyymmdd}{extention}")
+
+    # ftpsファイル転送
+    with Patched_FTP_TLS(host='172.17.0.3',user='ftpsuser', passwd='ftpsuser', timeout=60) as ftps:
         ftps.prot_p()
-        ftps.dir()
+        print(f"list={ftps.nlst('ftp_root')}")
+        ftps.storbinary(cmd=f"STOR {remote_path}", fp=open(file=local_path, mode='rb'))
 
 
 if __name__ == "__main__":
