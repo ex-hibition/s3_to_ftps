@@ -1,6 +1,14 @@
 import datetime
 import os
+import boto3
+import logging
 from ftplib import FTP_TLS, FTP
+
+# logging
+logging.basicConfig(level=logging.INFO)
+
+# 環境変数取得
+TARGET_ENV = os.getenv("TARGET_ENV", "local")
 
 # 相手先がvsftpdかつrequire_ssl_reuse=Trueの場合に必要なパッチ
 # https://stackoverflow.com/questions/14659154/ftps-with-python-ftplib-session-reuse-required
@@ -14,12 +22,10 @@ class Patched_FTP_TLS(FTP_TLS):
                                             session=self.sock.session)  # this is the fix
         return conn, size
 
-
 def handler(target_filename: str):
     """ハンドラ"""
     # ファイル取得
     get_file_from_s3(target_filename=target_filename)
-
     # ファイル転送
     put_ftps_to_saas(target_filename=target_filename)
 
@@ -29,7 +35,24 @@ def get_file_from_s3(target_filename: str):
     Args:
         target_filename (str): S3から取得するファイル
     """
-    pass
+    bucket_name = f"minio-input-{TARGET_ENV}"
+    key_name = target_filename
+    local_filename = f"/tmp/{target_filename}"
+
+    session, s3 = '', ''
+    if TARGET_ENV == 'local':
+        session = boto3.session.Session(profile_name='minio')
+        s3 = session.client('s3', endpoint_url='http://host.docker.internal:9000')
+    else:
+        session = boto3.session.Session()
+        s3 = session.client('s3')
+
+    try:
+        s3.download_file(Bucket=bucket_name, Key=key_name, Filename=local_filename)
+        logging.info(f"downloaded. : bucket_name={bucket_name}, key_name={key_name}, local_filename={local_filename}")
+    except Exception as e:
+        logging.error(f"get s3 error. : {e}")
+        raise
 
 def put_ftps_to_saas(target_filename: str):
     """ファイルを相手先のftpサーバにftpsでputする
@@ -44,11 +67,16 @@ def put_ftps_to_saas(target_filename: str):
     # 転送先ファイル名はyyyymmddを追加
     remote_path = os.path.join('ftp_root', f"{filename}_{yyyymmdd}{extention}")
 
-    # ftpsファイル転送
-    with Patched_FTP_TLS(host='172.17.0.3',user='ftpsuser', passwd='ftpsuser', timeout=60) as ftps:
-        ftps.prot_p()
-        print(f"list={ftps.nlst('ftp_root')}")
-        ftps.storbinary(cmd=f"STOR {remote_path}", fp=open(file=local_path, mode='rb'))
+    try:
+        # ftpsファイル転送
+        with Patched_FTP_TLS(host='172.17.0.2',user='ftpsuser', passwd='ftpsuser', timeout=60) as ftps:
+            ftps.prot_p()
+            logging.info(f"before list={ftps.nlst('ftp_root')}")
+            ftps.storbinary(cmd=f"STOR {remote_path}", fp=open(file=local_path, mode='rb'))
+            logging.info(f"after list={ftps.nlst('ftp_root')}")
+    except Exception as e:
+        logging.error(f"ftps error. : {e}")
+        raise
 
 
 if __name__ == "__main__":
